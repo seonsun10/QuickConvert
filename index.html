@@ -9,14 +9,21 @@
     <!-- Open Graph -->
     <meta property="og:title" content="QuickConvert | 100% 보안 서버리스 이미지 변환기">
     <meta property="og:description" content="서버 전송 없는 안전한 이미지 변환! 브라우저 내에서 바로 WebP, JPG로 변환하고 압축하세요.">
-    <meta property="og:type" content="website">
-    
     <link rel="stylesheet" href="style.css">
     <!-- JSZip for batch download -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <!-- Cropper.js for image editing -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+    <!-- File Conversion Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- hwp.js is less common on CDNs, but unpkg provides it -->
+    <script src="https://unpkg.com/hwp.js/dist/hwp.js"></script>
+    <!-- Mammoth.js for docx -->
+    <script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
+    <!-- docx library for generating docx -->
+    <script src="https://unpkg.com/docx@7.3.0/build/index.js"></script>
 </head>
 <body class="light-theme">
 
@@ -24,7 +31,7 @@
         <div class="container header-content">
             <div class="logo-area">
                 <h1>🖼️ QuickConvert</h1>
-                <p>서버 전송 없이 안전한 이미지 변환</p>
+                <p>서버 전송 없이 안전한 이미지 변환 및 파일 변환</p>
             </div>
             <button id="theme-toggle" class="theme-toggle-btn" aria-label="테마 변경">
                 <span class="sun">☀️</span>
@@ -45,19 +52,25 @@
             <span>광고 영역 (728x90)</span>
         </div>
 
-        <section class="upload-section">
-            <div id="drop-zone" class="drop-zone">
-                <div class="drop-zone-content">
-                    <span class="icon">📤</span>
-                    <p>이미지를 드래그하거나 클릭하여 업로드하세요</p>
-                    <span class="support-text">JPG, PNG, WebP 지원</span>
-                    <input type="file" id="file-input" multiple accept="image/*" hidden>
+        <nav class="feature-tabs" aria-label="Feature Selection">
+            <button class="feature-tab-btn active" data-target="image-converter-tab">🖼️ 이미지 변환</button>
+            <button class="feature-tab-btn" data-target="file-converter-tab">📄 파일 변환</button>
+        </nav>
+
+        <div id="image-converter-tab" class="feature-tab-content active">
+            <section class="upload-section">
+                <div id="drop-zone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <span class="icon">📤</span>
+                        <p>이미지를 드래그하거나 클릭하여 업로드하세요</p>
+                        <span class="support-text">JPG, PNG, WebP 지원</span>
+                        <input type="file" id="file-input" multiple accept="image/*" hidden>
+                    </div>
                 </div>
-            </div>
-            <div id="upload-ready-list" class="upload-ready-list" style="display: none;">
-                <!-- Temporary list of uploaded files for cropping -->
-            </div>
-        </section>
+                <div id="upload-ready-list" class="upload-ready-list" style="display: none;">
+                    <!-- Temporary list of uploaded files for cropping -->
+                </div>
+            </section>
 
         <section class="options-panel" id="options-panel" style="display: none;">
             <h2>변환 설정</h2>
@@ -95,15 +108,59 @@
             </div>
         </section>
 
-        <section class="result-section" id="result-section" style="display: none;">
-            <div class="result-header">
-                <h2>변환 결과</h2>
-                <button id="download-zip-btn" class="btn-secondary" style="display: none;">ZIP으로 한 번에 받기</button>
-            </div>
-            <div id="result-list" class="result-list">
-                <!-- Result items will be injected here -->
-            </div>
-        </section>
+            <section class="result-section" id="result-section" style="display: none;">
+                <div class="result-header">
+                    <h2>변환 결과</h2>
+                    <button id="download-zip-btn" class="btn-secondary" style="display: none;">ZIP으로 한 번에 받기</button>
+                </div>
+                <div id="result-list" class="result-list">
+                    <!-- Result items will be injected here -->
+                </div>
+            </section>
+        </div> <!-- End of image-converter-tab -->
+
+        <div id="file-converter-tab" class="feature-tab-content">
+            <section class="upload-section">
+                <div id="file-drop-zone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <span class="icon">📄</span>
+                        <p>문서 파일을 드래그하거나 클릭하여 업로드하세요</p>
+                        <span class="support-text">HWP, DOCX, TXT 지원 (PDF로 일괄 변환)</span>
+                        <input type="file" id="document-file-input" accept=".hwp, .docx, .txt" multiple hidden>
+                    </div>
+                </div>
+                <div id="file-upload-ready-list" class="upload-ready-list" style="display: none;">
+                    <!-- Temporary list of uploaded documents -->
+                </div>
+            </section>
+
+            <section class="options-panel" id="file-options-panel" style="display: none;">
+                <h2>파일 변환 설정</h2>
+                <div class="options-grid">
+                    <div class="option-item full-width">
+                        <label>결과 포맷 선택</label>
+                        <div class="format-tabs" id="file-format-tabs">
+                            <button type="button" class="tab-btn active" data-value="application/pdf">PDF</button>
+                            <!-- 동적으로 표시/숨김 처리될 추가 버튼들 -->
+                            <button type="button" class="tab-btn" data-value="application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display: none;">DOCX</button>
+                            <button type="button" class="tab-btn" data-value="text/plain" style="display: none;">TXT</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="action-buttons">
+                    <button id="convert-file-btn" class="btn-primary">파일 변환하기</button>
+                </div>
+            </section>
+
+            <section class="result-section" id="file-result-section" style="display: none;">
+                <div class="result-header">
+                    <h2>문서 변환 결과</h2>
+                </div>
+                <div id="file-result-list" class="result-list">
+                    <!-- File result items will be injected here -->
+                </div>
+            </section>
+        </div> <!-- End of file-converter-tab -->
 
         <!-- SEO Article Section -->
         <section class="seo-content">

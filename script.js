@@ -15,6 +15,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const loader = document.getElementById('loader');
     const themeToggle = document.getElementById('theme-toggle');
 
+    // Feature Tabs
+    const featureTabBtns = document.querySelectorAll('.feature-tab-btn');
+    const featureTabContents = document.querySelectorAll('.feature-tab-content');
+
+    // File Converter UI Elements
+    const fileDropZone = document.getElementById('file-drop-zone');
+    const documentFileInput = document.getElementById('document-file-input');
+    const fileUploadReadyList = document.getElementById('file-upload-ready-list');
+    const fileOptionsPanel = document.getElementById('file-options-panel');
+    const fileResultSection = document.getElementById('file-result-section');
+    const fileResultList = document.getElementById('file-result-list');
+    const convertFileBtn = document.getElementById('convert-file-btn');
+
     // Modals
     const modalContainer = document.getElementById('modal-container');
     const modalClose = document.getElementById('modal-close');
@@ -55,6 +68,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let cropper = null;
     let currentEditingId = null;
     let currentMode = 'crop';
+
+    // File Converter State
+    let uploadedFiles = [];
+    let hwpJsInstance = null; // To hold hwp.js instance if needed globally
 
     // Drawing & Zoom State
     let isDrawing = false;
@@ -202,6 +219,18 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.setItem('theme', isDark ? 'dark' : 'light');
     });
 
+    // Feature Tabs logic
+    featureTabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            featureTabBtns.forEach(b => b.classList.remove('active'));
+            featureTabContents.forEach(c => c.classList.remove('active'));
+
+            btn.classList.add('active');
+            const targetId = btn.dataset.target;
+            document.getElementById(targetId).classList.add('active');
+        });
+    });
+
     tabBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             tabBtns.forEach(b => b.classList.remove('active'));
@@ -263,6 +292,65 @@ document.addEventListener('DOMContentLoaded', () => {
         saveBlob(content, 'quickconvert_results.zip');
     });
 
+    // --- File Converter Event Listeners ---
+    fileDropZone.addEventListener('click', () => documentFileInput.click());
+    documentFileInput.addEventListener('change', (e) => handleDocumentFiles(e.target.files));
+    fileDropZone.addEventListener('dragover', (e) => { e.preventDefault(); fileDropZone.classList.add('dragover'); });
+    fileDropZone.addEventListener('dragleave', () => fileDropZone.classList.remove('dragover'));
+    fileDropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        fileDropZone.classList.remove('dragover');
+        handleDocumentFiles(e.dataTransfer.files);
+    });
+
+    convertFileBtn.addEventListener('click', async () => {
+        if (uploadedFiles.length === 0) return;
+        showLoader(true);
+        loader.querySelector('p').textContent = '문서를 PDF로 변환 중...';
+
+        fileResultList.innerHTML = '';
+        fileResultSection.style.display = 'block';
+        const targetFormat = document.querySelector('#file-format-tabs .tab-btn.active').dataset.value;
+
+        for (let i = 0; i < uploadedFiles.length; i++) {
+            const item = uploadedFiles[i];
+            try {
+                let generatedBlob = null;
+                const ext = item.file.name.split('.').pop().toLowerCase();
+
+                if (targetFormat === 'application/pdf') {
+                    if (ext === 'hwp') generatedBlob = await processDocumentToPDF(item.file);
+                    else if (ext === 'docx') generatedBlob = await processDocxToPDF(item.file);
+                    else if (ext === 'txt') generatedBlob = await processTxtToPDF(item.file);
+                } else if (targetFormat === 'text/plain') {
+                    if (ext === 'hwp') generatedBlob = await processHwpToTxt(item.file);
+                    else if (ext === 'docx') generatedBlob = await processDocxToTxt(item.file);
+                } else if (targetFormat === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                    if (ext === 'txt') generatedBlob = await processTxtToDocx(item.file);
+                }
+
+                if (generatedBlob) {
+                    const outputName = getOutputFilename(item.file.name, targetFormat);
+                    renderFileResult({
+                        url: URL.createObjectURL(generatedBlob),
+                        name: outputName,
+                        originalSize: item.file.size,
+                        newSize: generatedBlob.size,
+                        blob: generatedBlob
+                    });
+                }
+            } catch (err) {
+                console.error('File conversion error:', err);
+                alert(`${item.file.name} 변환 중 오류가 발생했습니다: ${err.message}`);
+            }
+        }
+
+        showLoader(false);
+        loader.querySelector('p').textContent = '변환 중입니다...'; // reset
+        fileResultSection.scrollIntoView({ behavior: 'smooth' });
+    });
+
+
     modalClose.addEventListener('click', closeModal);
     window.addEventListener('click', (e) => { if (e.target === modalContainer) closeModal(); });
     compareRange.addEventListener('input', (e) => { compareAfterWrapper.style.width = e.target.value + '%'; });
@@ -294,6 +382,28 @@ document.addEventListener('DOMContentLoaded', () => {
         renderUploadList();
     }
 
+    // Handle Document Files (HWP)
+    function handleDocumentFiles(files) {
+        if (files.length === 0) return;
+        for (const file of files) {
+            const fileName = file.name.toLowerCase();
+            if (!(fileName.endsWith('.hwp') || fileName.endsWith('.docx') || fileName.endsWith('.txt'))) {
+                alert(`${file.name}은(는) 지원되지 않는 파일 형식입니다. HWP, DOCX, TXT 파일만 지원됩니다.`);
+                continue;
+            }
+            // Check for duplicates
+            if (!uploadedFiles.find(f => f.file.name === file.name)) {
+                uploadedFiles.push({ file, id: Date.now() + Math.random() });
+            }
+        }
+
+        if (uploadedFiles.length > 0) {
+            fileOptionsPanel.style.display = 'block';
+            fileOptionsPanel.scrollIntoView({ behavior: 'smooth' });
+            renderFileUploadList();
+        }
+    }
+
     function renderUploadList() {
         uploadReadyList.innerHTML = '';
         uploadReadyList.style.display = uploadedImages.length > 0 ? 'grid' : 'none';
@@ -309,6 +419,55 @@ document.addEventListener('DOMContentLoaded', () => {
             uploadReadyList.appendChild(div);
         });
         convertAllBtn.textContent = `${uploadedImages.length}개의 이미지 변환하기`;
+    }
+
+    function renderFileUploadList() {
+        fileUploadReadyList.innerHTML = '';
+        fileUploadReadyList.style.display = uploadedFiles.length > 0 ? 'grid' : 'none';
+        uploadedFiles.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'upload-item document-item';
+            div.innerHTML = `
+                <div style="font-size: 3rem; margin-bottom: 10px;">📄</div>
+                <span>${item.file.name}</span>
+                <span class="file-size">${formatBytes(item.file.size)}</span>
+            `;
+            fileUploadReadyList.appendChild(div);
+        });
+
+        // 탭 가시성 업데이트 로직
+        updateFormatTabsVisibility(uploadedFiles);
+
+        convertFileBtn.textContent = `${uploadedFiles.length}개의 파일 변환하기`;
+    }
+
+    function updateFormatTabsVisibility(files) {
+        const tabs = document.querySelectorAll('#file-format-tabs .tab-btn');
+        tabs.forEach(t => t.style.display = 'none'); // 초기화
+
+        // 항상 PDF는 지원
+        const pdfTab = document.querySelector('#file-format-tabs .tab-btn[data-value="application/pdf"]');
+        if (pdfTab) pdfTab.style.display = 'inline-block';
+
+        if (files.length > 0) {
+            // 편의상 첫 번째 아이템의 확장자로 판별 (일괄처리의 경우 확장자가 섞일 수 있으나 최소한 첫 번째를 기준으로 UI 설정)
+            const ext = files[0].file.name.split('.').pop().toLowerCase();
+            const txtTab = document.querySelector('#file-format-tabs .tab-btn[data-value="text/plain"]');
+            const docxTab = document.querySelector('#file-format-tabs .tab-btn[data-value="application/vnd.openxmlformats-officedocument.wordprocessingml.document"]');
+
+            if (ext === 'hwp' || ext === 'docx') {
+                if (txtTab) txtTab.style.display = 'inline-block';
+            } else if (ext === 'txt') {
+                if (docxTab) docxTab.style.display = 'inline-block';
+            }
+        }
+
+        // 활성 탭이 숨김처리 되었다면 PDF로 초기화
+        let activeTab = document.querySelector('#file-format-tabs .tab-btn.active');
+        if (activeTab && activeTab.style.display === 'none') {
+            tabs.forEach(t => t.classList.remove('active'));
+            if (pdfTab) pdfTab.classList.add('active');
+        }
     }
 
     function openEditModal(item) {
@@ -440,6 +599,222 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    async function processDocumentToPDF(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = async function (e) {
+                try {
+                    const arrayBuffer = e.target.result;
+                    // Create a hidden container for rendering HWP
+                    const container = document.createElement('div');
+                    container.style.width = '794px'; // A4 width in px (approx)
+                    container.style.padding = '20px';
+                    container.style.background = 'white';
+                    container.style.color = 'black';
+                    container.style.position = 'absolute';
+                    container.style.left = '-9999px';
+                    document.body.appendChild(container);
+
+                    // Initialize hwp.js and display
+                    const hwpObj = new window.hwp.HWP(arrayBuffer);
+                    await window.hwp.display(hwpObj, container);
+
+                    // Convert rendered HTML to PDF
+                    const canvas = await html2canvas(container, {
+                        scale: 2, // better quality
+                        useCORS: true
+                    });
+
+                    const imgData = canvas.toDataURL('image/jpeg', 0.95);
+                    const pdf = new window.jspdf.jsPDF('p', 'mm', 'a4');
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+                    pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+
+                    const pdfOutput = pdf.output('blob');
+
+                    // Cleanup
+                    document.body.removeChild(container);
+
+                    resolve(pdfOutput);
+                } catch (error) {
+                    console.error("Error during HWP extraction/PDF generation:", error);
+                    reject(error);
+                }
+            };
+            reader.onerror = (e) => reject(e);
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    async function processDocxToPDF(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = async function (e) {
+                try {
+                    const arrayBuffer = e.target.result;
+
+                    // Convert DOCX to HTML using Mammoth
+                    const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+                    const html = result.value;
+
+                    // Container for rendering
+                    const container = document.createElement('div');
+                    container.style.width = '794px';
+                    container.style.padding = '40px';
+                    container.style.background = 'white';
+                    container.style.color = 'black';
+                    container.style.position = 'absolute';
+                    container.style.left = '-9999px';
+                    container.style.fontFamily = "'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+                    container.innerHTML = html;
+                    document.body.appendChild(container);
+
+                    // Generate PDF via canvas
+                    const canvas = await html2canvas(container, { scale: 2, useCORS: true });
+                    const imgData = canvas.toDataURL('image/jpeg', 0.95);
+                    const pdf = new window.jspdf.jsPDF('p', 'mm', 'a4');
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+                    pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+                    const pdfOutput = pdf.output('blob');
+
+                    document.body.removeChild(container);
+                    resolve(pdfOutput);
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            reader.onerror = (e) => reject(e);
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    async function processTxtToPDF(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = async function (e) {
+                try {
+                    const text = e.target.result;
+
+                    // Container for rendering TXT
+                    const container = document.createElement('div');
+                    container.style.width = '794px';
+                    container.style.padding = '40px';
+                    container.style.background = 'white';
+                    container.style.color = 'black';
+                    container.style.position = 'absolute';
+                    container.style.left = '-9999px';
+                    container.style.fontFamily = "monospace";
+                    container.style.whiteSpace = "pre-wrap"; // Preserve formatting
+                    container.style.wordWrap = "break-word";
+                    container.innerText = text;
+                    document.body.appendChild(container);
+
+                    // Generate PDF via canvas
+                    const canvas = await html2canvas(container, { scale: 2, useCORS: true });
+                    const imgData = canvas.toDataURL('image/jpeg', 0.95);
+                    const pdf = new window.jspdf.jsPDF('p', 'mm', 'a4');
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+                    pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+                    const pdfOutput = pdf.output('blob');
+
+                    document.body.removeChild(container);
+                    resolve(pdfOutput);
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            reader.onerror = (e) => reject(e);
+            reader.readAsText(file, 'utf-8'); // read as text
+        });
+    }
+
+    // --- 상호 문서 변환 로직 시작 ---
+
+    async function processHwpToTxt(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = async function (e) {
+                try {
+                    const arrayBuffer = e.target.result;
+                    // 문서 추출용 컨테이너 생성 및 파싱 (보이지 않게)
+                    const tempDoc = document.createElement('div');
+                    const hwpObj = new window.hwp.HWP(arrayBuffer);
+                    await window.hwp.display(hwpObj, tempDoc);
+
+                    const extractedText = tempDoc.innerText;
+                    const blob = new Blob([extractedText], { type: 'text/plain;charset=utf-8' });
+                    resolve(blob);
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            reader.onerror = (e) => reject(e);
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    async function processDocxToTxt(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = async function (e) {
+                try {
+                    const arrayBuffer = e.target.result;
+                    // Use mammoth.extractRawText for getting pure text from docx
+                    const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+                    const extractedText = result.value;
+                    const blob = new Blob([extractedText], { type: 'text/plain;charset=utf-8' });
+                    resolve(blob);
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            reader.onerror = (e) => reject(e);
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    async function processTxtToDocx(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = async function (e) {
+                try {
+                    const text = e.target.result;
+                    const lines = text.split('\n');
+
+                    // Create docx Paragraphs from lines
+                    const docxLib = typeof docx !== 'undefined' ? docx : window.docx;
+                    const paragraphs = lines.map(line => {
+                        return new docxLib.Paragraph({
+                            children: [new docxLib.TextRun(line)]
+                        });
+                    });
+
+                    const doc = new docxLib.Document({
+                        sections: [{
+                            properties: {},
+                            children: paragraphs
+                        }]
+                    });
+
+                    const blob = await docxLib.Packer.toBlob(doc);
+                    resolve(blob);
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            reader.onerror = (e) => reject(e);
+            reader.readAsText(file, 'utf-8');
+        });
+    }
+
+    // --- 상호 문서 변환 로직 끝 ---
+
     function renderResult(res) {
         const item = document.createElement('div');
         item.className = 'result-item';
@@ -454,9 +829,37 @@ document.addEventListener('DOMContentLoaded', () => {
         resultList.appendChild(item);
     }
 
+    function renderFileResult(res) {
+        const item = document.createElement('div');
+        item.className = 'result-item';
+        item.innerHTML = `
+            <div style="font-size: 2.5rem; width: 60px; text-align: center;">📑</div>
+            <div class="file-info">
+                <div class="file-name">${res.name}</div>
+                <span style="color:var(--success-color)">변환 성공</span>
+            </div>
+            <div class="size-compare">
+                <div class="size-old">${formatBytes(res.originalSize)}</div>
+                <div class="size-new">${formatBytes(res.newSize)}</div>
+            </div>
+            <div class="result-actions">
+                <button class="action-btn" onclick="window.open('${res.url}', '_blank')">미리보기</button>
+                <a href="${res.url}" download="${res.name}" class="action-btn download-btn" style="text-decoration:none; background:var(--primary-color); color:white;">다운로드</a>
+            </div>
+        `;
+        fileResultList.appendChild(item);
+    }
+
     function getOutputFilename(originalName, mimeType) {
         const baseName = originalName.substring(0, originalName.lastIndexOf('.')) || originalName;
-        const ext = mimeType.split('/')[1].replace('jpeg', 'jpg').replace('image/', '');
+        let ext = 'bin';
+        if (mimeType === 'image/webp') ext = 'webp';
+        else if (mimeType === 'image/jpeg') ext = 'jpg';
+        else if (mimeType === 'image/png') ext = 'png';
+        else if (mimeType === 'application/pdf') ext = 'pdf';
+        else if (mimeType === 'text/plain') ext = 'txt';
+        else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') ext = 'docx';
+        else ext = mimeType.split('/')[1].replace('jpeg', 'jpg').replace('image/', '');
         return `${baseName}.${ext}`;
     }
 
